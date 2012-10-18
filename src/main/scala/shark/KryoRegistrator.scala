@@ -1,12 +1,17 @@
 package shark
 
+import java.io.{DataInputStream, DataOutputStream}
 import java.util.Arrays
-import java.nio.ByteBuffer
-import com.esotericsoftware.kryo.Kryo
+
+import com.esotericsoftware.kryo.{Kryo, Serializer => KSerializer}
+import com.esotericsoftware.kryo.io.{Input => KryoInput, Output => KryoOutput}
 import com.esotericsoftware.kryo.serializers.{JavaSerializer => KryoJavaSerializer}
+
 import de.javakaffee.kryoserializers.ArraysAsListSerializer
-import shark.execution.MapJoinOperator
-import org.apache.hadoop.hive.ql.exec.persistence.{MapJoinSingleKey, MapJoinObjectKey, MapJoinDoubleKeys, MapJoinObjectValue}
+
+import org.apache.hadoop.io.Writable
+import org.apache.hadoop.hive.ql.exec.persistence.{MapJoinSingleKey, MapJoinObjectKey,
+    MapJoinDoubleKeys, MapJoinObjectValue}
 
 
 class KryoRegistrator extends spark.KryoRegistrator {
@@ -18,9 +23,31 @@ class KryoRegistrator extends spark.KryoRegistrator {
     // by default Kryo. This provides a workaround.
     kryo.register(Arrays.asList().getClass, new ArraysAsListSerializer)
 
+    // The map join data structures are Java serializable.
     kryo.register(classOf[MapJoinSingleKey], new KryoJavaSerializer)
     kryo.register(classOf[MapJoinObjectKey], new KryoJavaSerializer)
     kryo.register(classOf[MapJoinDoubleKeys], new KryoJavaSerializer)
     kryo.register(classOf[MapJoinObjectValue], new KryoJavaSerializer)
+
+    // As far as I (rxin), among all Hadoop writables only TimestampWritable
+    // cannot be serialized by Kryo out of the box.
+    kryo.register(classOf[org.apache.hadoop.hive.serde2.io.TimestampWritable],
+      new KryoWritableSerializer[org.apache.hadoop.hive.serde2.io.TimestampWritable])
+  }
+}
+
+
+/** A Kryo serializer for Hadoop writables. */
+class KryoWritableSerializer[T <: Writable] extends KSerializer[T] {
+  override def write(kryo: Kryo, output: KryoOutput, writable: T) {
+    val ouputStream = new DataOutputStream(output)
+    writable.write(ouputStream)
+  }
+
+  override def read(kryo: Kryo, input: KryoInput, cls: java.lang.Class[T]): T = {
+    val writable = cls.newInstance()
+    val inputStream = new DataInputStream(input)
+    writable.readFields(inputStream)
+    writable
   }
 }
